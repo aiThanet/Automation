@@ -127,7 +127,6 @@ def get_data(bills,server='127.0.0.1',database='database',username='uid',passwor
             '''
             amt_total = 0
             cursor.execute(query_2, row.SOInvID)
-
             if row.CustName not in output:
                 output[row.CustName] = defaultdict(float)
             for row2 in cursor.fetchall():
@@ -189,14 +188,15 @@ def write_output(output, dest_filename='output.xlsx'):
 def run(e):
     try:
         global root
-        bills = set([bill.upper() for bill in e['bills'].get("1.0","end-1c").split('\n') if bill])
+        seen = set()
+        bills = [bill.upper() for bill in e['bills'].get("1.0","end-1c").split('\n') if bill and bill not in seen and not seen.add(bill)]
 
         dest_filename='output.xlsx'
         rate_engine = float(e['เครื่องยนต์'].get())
         rate_part = float(e['อะไหล่'].get())
 
         # bills = scan_bill()
-        output = get_data(bills,server="localhost",database='db',username='user',password = 'password',rate_engine=rate_engine,rate_part=rate_part)
+        output = get_data(bills,server="localhost",database='db',username='uid',password = 'password',rate_engine=rate_engine,rate_part=rate_part)
         write_output(output,dest_filename=dest_filename)
         
         os.system(f'start excel {dest_filename}')
