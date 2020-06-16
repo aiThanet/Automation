@@ -155,7 +155,7 @@ def write_output(output, dest_filename='output.xlsx'):
         output_worksheet.cell(row=1, column=i+1).value = col
 
     curr_row = 2
-    for customer in sorted(output):
+    for customer in output:
         output_worksheet.cell(row=curr_row, column=1).value = customer
         total_amount = 0
         total_commission = 0
@@ -196,7 +196,7 @@ def run(e):
         rate_part = float(e['อะไหล่'].get())
 
         # bills = scan_bill()
-        output = get_data(bills,server="localhost",database='db',username='user',password = 'pass',rate_engine=rate_engine,rate_part=rate_part)
+        output = get_data(bills,server="localhost",database='db',username='user',password = 'password',rate_engine=rate_engine,rate_part=rate_part)
         write_output(output,dest_filename=dest_filename)
         
         os.system(f'start excel {dest_filename}')
