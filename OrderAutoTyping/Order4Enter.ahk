@@ -29,5 +29,4 @@ for index, element in response["orders"]
 			}
 		}
 			
-			
 		
