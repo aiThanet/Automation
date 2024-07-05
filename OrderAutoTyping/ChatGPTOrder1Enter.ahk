@@ -14,7 +14,7 @@ if ErrorLevel ;*[Untitled1]
 	return
 }
 else
-	API = http://mathongapi.jpn.local/chatgpt/order?order_id=%UserInput%
+	API = http://mathongapi.jpn.local/chatgpt/order?order_id=%UserInput%&is_combine=true
 
 oWhr := ComObjCreate("WinHttp.WinHttpRequest.5.1")
 oWhr.Open("GET", API, false)
@@ -50,6 +50,8 @@ if (TotalPage = 0)
 }
 
 MsgBox, % "Order: " response["order_id"] "`nอัพเดต: " SubStr(response["rec_updated_when"],1,19) " (+7hr)`nจำนวนหน้าทั้งหมด: " TotalPage " หน้า"
+
+clipboard := response["cust_code"]
 
 Gui, Margin, +20, +20
 
