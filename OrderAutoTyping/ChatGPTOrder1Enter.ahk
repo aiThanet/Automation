@@ -79,7 +79,7 @@ Do_AddItem:
 	{
 		if(index >= minItem and index <= maxItem)
 		{
-			Send, % element["correct_good_code"]
+			Send, % element["good_code_correction"]
 			Loop, 5{
 				Send, {Enter}
 			}
