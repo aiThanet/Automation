@@ -3,7 +3,7 @@
 #Include _JXON.ahk ; Ensure you have the JSON library available in your script directory
 
 ; --- Configuration ---
-; SetTitleMatchMode 2 ; Allow partial match for window titles
+SetTitleMatchMode 3 ; Exact match for window titles
 SetControlDelay 0
 
 ; IMPORTANT: Replace these placeholders with the actual values you find using "Active Window Info".
@@ -15,7 +15,7 @@ global response_obj := {} ; Initialize response object
 
 ^l::
 {
-    if not WinExist(SOWindowTitle) {
+    if not WinExist(SOWindowTitle) or not WinExist(WinspeedClass) {
         MsgBox("หน้าต่างใบสั่งขาย ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
         return ; Exit the script if the window isn't found
     }
