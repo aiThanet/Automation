@@ -15,12 +15,28 @@ global response_obj := {} ; Initialize response object
 
 ^l::
 {
-    if not WinExist(SOWindowTitle) or not WinExist(WinspeedClass) {
-        MsgBox("หน้าต่างใบสั่งขาย ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
+    if not WinExist(WinspeedClass) {
+        MsgBox("โปรแกรม Winspeed ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
         return ; Exit the script if the window isn't found
     }
 
-    WinActivate(SOWindowTitle)
+    HWNDs := WinGetList(WinspeedClass)
+    SOHwnd := ''
+    for hwnd in HWNDs {
+        winspeedTitle := WinGetTitle(hwnd)
+        if (winspeedTitle = SOWindowTitle) {
+            WinActivate(hwnd)
+            SOHwnd := hwnd
+            break
+        }
+    }
+
+    if (SOHwnd = '') {
+        MsgBox("หน้าต่าง " . SOWindowTitle . " ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
+        return
+    }
+
+    WinActivate(SOHwnd)
 
     orderId := InputBox("กรุณาใส่ตัวเลข18หลัก", "ใส่ Order ID", "w200 h100")
     ; Check if orderId is an 18-digit number
@@ -66,7 +82,7 @@ global response_obj := {} ; Initialize response object
     btnConfirm := gui1.Add("Button", "w200 h40", "Confirm")
 
     ddlControl.OnEvent("Change", Submit_All)
-    btnConfirm.OnEvent("Click", (*) => Do_AddItem(gui1, items, cust_id))
+    btnConfirm.OnEvent("Click", (*) => Do_AddItem(gui1, SOHwnd, items, cust_id))
 
     gui1.Show()
 
@@ -78,7 +94,7 @@ Submit_All(ctrl, info) {
     global DDL := ctrl.Text
 }
 
-Do_AddItem(guiWindow, items, cust_id) {
+Do_AddItem(guiWindow, SOHwnd, items, cust_id) {
 
     if (DDL = "") {
         MsgBox "Please select page"
@@ -92,14 +108,14 @@ Do_AddItem(guiWindow, items, cust_id) {
 
     guiWindow.Destroy()
 
-    ControlFocus "Edit46", SOWindowTitle
-    ControlSend(cust_id . "{Enter}", "Edit46", SOWindowTitle) ; Customer ID
+    ControlFocus("Edit46", SOHwnd)
+    ControlSend(cust_id . "{Enter}", "Edit46", SOHwnd) ; Customer ID
     Sleep(200)
 
-    ControlClick "x588 y50", SOWindowTitle, , , , "NA" ; Run Bill Code
+    ControlClick "x588 y50", SOHwnd, , , , "NA" ; Run Bill Code
     Sleep(200)
 
-    ControlFocus "Edit12", SOWindowTitle
+    ControlFocus "Edit12", SOHwnd
     Sleep(500)
 
     loop items.Length {
