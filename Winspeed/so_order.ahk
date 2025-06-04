@@ -16,15 +16,16 @@ global response_obj := {} ; Initialize response object
 ^l::
 {
     if not WinExist(SOWindowTitle) {
-        MsgBox("หน้าต่างใบสั่งขาย ไม่ได้ถูกเปิดใช้งาน", "Error", "IconError")
+        MsgBox("หน้าต่างใบสั่งขาย ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
         return ; Exit the script if the window isn't found
     }
+
     WinActivate(SOWindowTitle)
 
     orderId := InputBox("กรุณาใส่ตัวเลข18หลัก", "ใส่ Order ID", "w200 h100")
     ; Check if orderId is an 18-digit number
     if !RegExMatch(orderId.Value, "^\d{18}$") {
-        MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข18หลัก", "Error", "IconError")
+        MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข18หลัก", "Error", "Iconx")
         return
     }
 
