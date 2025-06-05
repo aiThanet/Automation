@@ -44,39 +44,122 @@ global response_obj := {} ; Initialize response object
         return
     }
 
-    Boundary := "---------------------------" . A_TickCount . Random(1000, 9999) ; Generate a unique boundary
+    ; Prepare the HTTP request
+    apiUrl := "http://localhost:3100/ecom/upload/bigseller"
 
-    ; Construct the multipart/form-data body
-    ; This is a simplified example. For very large files, reading in chunks might be better.
-    FileContent := FileRead(SelectedFile, "RAW") ; Read file content as raw binary data
+    ; Create COM object for HTTP request
+    req := ComObject("WinHttp.WinHttpRequest.5.1")
+    req.Open("POST", apiUrl, false)
 
-    ; Define the form fields
-    ; The 'file' field is for the actual file content
-    Body := "--" . Boundary . "`r`n"
-        . "Content-Disposition: form-data; name='file'; filename='test`r`n'"
-        . "Content-Type: application/octet-stream`r`n" ; Or specific MIME type if known (e.g., image/jpeg)
-        . "`r`n"
-        . FileContent . "`r`n"
-        . "--" . Boundary . "--`r`n" ; Closing boundary
+    objParam := { file: [SelectedFile] }
+    CreateFormData(&PostData, &hdr_ContentType, objParam)
 
-    URL := "https://mathongapi.jpn.local/cost/preupload?version=V1"
+    req.SetRequestHeader("Content-Type", hdr_ContentType)
+    req.Send(PostData)
 
-    HttpRequest := ComObject("WinHttp.WinHttpRequest.5.1")
-    HttpRequest.Open("POST", URL, True) ; True for asynchronous, False for synchronous
+    response := req.ResponseBody
+    stream := ComObject("ADODB.Stream")
+    stream.Type := 1  ; Binary
+    stream.Open()
+    stream.Write(response)
+    stream.Position := 0
+    stream.Type := 2  ; Text
+    stream.Charset := "utf-8"
+    resText := stream.ReadText()
+    stream.Close()
 
-    HttpRequest.SetRequestHeader("accept", "application/json")
-    HttpRequest.SetRequestHeader("Content-Type", "multipart/form-data; boundary=" . Boundary)
-    HttpRequest.SetRequestHeader("Content-Length", StrLen(Body)) ; Set content length
+    response_obj := jxon_load(&resText)
 
-    ; Send the request
-    HttpRequest.Send(Body)
+}
 
-    ; Wait for the response (for synchronous request, this isn't strictly needed)
-    ; For asynchronous, you'd typically use HttpRequest.WaitForResponse() or an event handler
-    ; Since this is a simple example, we'll block. In a real GUI, consider a separate thread.
-    HttpRequest.WaitForResponse()
+class CreateFormData {
 
-    StatusCode := HttpRequest.Status
-    ResponseText := HttpRequest.ResponseText
+    __New(&retData, &retHeader, objParam) {
+
+        local CRLF := "`r`n", i, k, v, str, pvData
+        ; Create a random Boundary
+        local Boundary := CreateFormData.RandomBoundary()
+        local BoundaryLine := "------------------------------" . Boundary
+
+        ; Create an IStream backed with movable memory.
+        hData := DllCall("GlobalAlloc", "uint", 0x2, "uptr", 0, "ptr")
+        DllCall("ole32\CreateStreamOnHGlobal", "ptr", hData, "int", False, "ptr*", &pStream := 0, "uint")
+        CreateFormData.pStream := pStream
+
+        ; Loop input paramters
+        for k, v in objParam.OwnProps() {
+            if IsObject(v) {
+                for i, FileName in v {
+                    str := BoundaryLine . CRLF
+                        . 'Content-Disposition: form-data; name="' . k . '"; filename="' . FileName . '"' . CRLF
+                        . 'Content-Type: ' . CreateFormData.MimeType(FileName) . CRLF . CRLF
+
+                    CreateFormData.StrPutUTF8(str)
+                    CreateFormData.LoadFromFile(Filename)
+                    CreateFormData.StrPutUTF8(CRLF)
+
+                }
+            } else {
+                str := BoundaryLine . CRLF
+                    . 'Content-Disposition: form-data; name="' . k '"' . CRLF . CRLF
+                    . v . CRLF
+                CreateFormData.StrPutUTF8(str)
+            }
+        }
+
+        CreateFormData.StrPutUTF8(BoundaryLine . "--" . CRLF)
+
+        CreateFormData.pStream := ObjRelease(pStream) ; Should be 0.
+        pData := DllCall("GlobalLock", "ptr", hData, "ptr")
+        size := DllCall("GlobalSize", "ptr", pData, "uptr")
+
+        ; Create a bytearray and copy data in to it.
+        retData := ComObjArray(0x11, size) ; Create SAFEARRAY = VT_ARRAY|VT_UI1
+        pvData := NumGet(ComObjValue(retData), 8 + A_PtrSize, "ptr")
+        DllCall("RtlMoveMemory", "Ptr", pvData, "Ptr", pData, "Ptr", size)
+
+        DllCall("GlobalUnlock", "ptr", hData)
+        DllCall("GlobalFree", "Ptr", hData, "Ptr")                   ; free global memory
+
+        retHeader := "multipart/form-data; boundary=----------------------------" . Boundary
+    }
+
+    static StrPutUTF8(str) {
+        buf := Buffer(StrPut(str, "UTF-8") - 1) ; remove null terminator
+        StrPut(str, buf, buf.size, "UTF-8")
+        DllCall("shlwapi\IStream_Write", "ptr", CreateFormData.pStream, "ptr", buf.Ptr, "uint", buf.Size, "uint")
+    }
+
+    static LoadFromFile(filepath) {
+        DllCall("shlwapi\SHCreateStreamOnFileEx"
+            , "wstr", filepath
+            , "uint", 0x0             ; STGM_READ
+            , "uint", 0x80            ; FILE_ATTRIBUTE_NORMAL
+            , "int", False            ; fCreate is ignored when STGM_CREATE is set.
+            , "ptr", 0               ; pstmTemplate (reserved)
+            , "ptr*", &pFileStream := 0
+            , "uint")
+        DllCall("shlwapi\IStream_Size", "ptr", pFileStream, "uint64*", &size := 0, "uint")
+        DllCall("shlwapi\IStream_Copy", "ptr", pFileStream, "ptr", CreateFormData.pStream, "uint", size, "uint")
+        ObjRelease(pFileStream)
+    }
+
+    static RandomBoundary() {
+        str := "0|1|2|3|4|5|6|7|8|9|a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z"
+        Sort str, 'D| Random'
+        str := StrReplace(str, "|")
+        return SubStr(str, 1, 12)
+    }
+
+    static MimeType(FileName) {
+        n := FileOpen(FileName, "r").ReadUInt()
+        return (n = 0x474E5089) ? "iกmage/png"
+            : (n = 0x38464947) ? "image/gif"
+                : (n & 0xFFFF = 0x4D42) ? "image/bmp"
+                    : (n & 0xFFFF = 0xD8FF) ? "image/jpeg"
+                        : (n & 0xFFFF = 0x4949) ? "image/tiff"
+                            : (n & 0xFFFF = 0x4D4D) ? "image/tiff"
+                                : "application/octet-stream"
+    }
 
 }

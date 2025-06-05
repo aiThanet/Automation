@@ -41,8 +41,8 @@ global response_obj := {} ; Initialize response object
 
     orderId := InputBox("กรุณาใส่ตัวเลข18หลัก", "ใส่ Order ID", "w200 h100")
     ; Check if orderId is an 18-digit number
-    if !RegExMatch(orderId.Value, "^\d{18}$") {
-        MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข18หลัก", "Error", "Iconx")
+    if !RegExMatch(orderId.Value, "^\d{17,18}$") {
+        MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข17-18หลัก", "Error", "Iconx")
         return
     }
 
