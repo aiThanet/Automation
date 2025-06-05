@@ -11,7 +11,6 @@ SetControlDelay 0
 CustField := "Edit70" ; Customer ID field
 SOWindowTitle := "ขายเชื่อ"
 WinspeedClass := "ahk_class FNWND380"
-global response_obj := {} ; Initialize response object
 
 ^l::
 {
@@ -69,8 +68,73 @@ global response_obj := {} ; Initialize response object
     stream.Close()
 
     response_obj := jxon_load(&resText)
+    total_orders := response_obj.Length
 
+    text_b := Jxon_Dump(response_obj)
+
+    MsgBox("จำนวนออเดอร์ทั้งหมด: " . total_orders)
+
+    for index, order in response_obj {
+        order_id := order["order_id"]
+        cust_id := order["cust_id"]
+        platform := order["platform"]
+        store := order["store"]
+        items := order["items"]
+
+        MsgBox("Order ที่ " . index . " / " . total_orders . "`nOrder ID: " . order_id . "`n`nแพลตฟอร์ม: " . platform . "`nร้าน: " . store . "`n`nจำนวนรายการสินค้า: " . items.Length)
+
+        ControlFocus("Edit70", SOHwnd)
+        ControlSend(cust_id . "{Enter}", "Edit70", SOHwnd) ; Customer ID
+        Sleep(200)
+
+        ControlClick "x588 y50", SOHwnd, , , , "NA" ; Run Bill Code
+        Sleep(200)
+
+        ControlFocus "Edit10", SOHwnd
+        Sleep(500)
+
+        loop items.Length {
+            index := A_Index
+            item := items[index]
+
+            valueToSend := item["goodcode"]
+            
+            if(valueToSend = ""){
+                MsgBox("รายการสินค้า: " . item["sku"] . "`nจำนวน: " . item["quantity"] . "`n`nกด Ctrl+N เพื่อใส่ข้อมูลต่อไป...", "ไม่พบรหัสสินค้า", "Iconx")
+                KeyWait "Control", "D"
+                KeyWait "n", "D"
+            } else {
+                SendText(valueToSend)
+                Sleep(100)
+
+                loop 5
+                    Send("{Enter}")
+
+                SendText(item["qty"])
+                Sleep(100)
+
+                loop 4
+                    Send("{Enter}")
+            }
+        }
+
+        ControlClick "x160 y404", SOHwnd, , , , "NA" ; Click Description
+        Sleep(200)
+
+        ControlFocus("Edit38", SOHwnd)
+        ControlSendText(platform . ":" . order_id, "Edit38", SOHwnd) ; Customer ID
+        Sleep(200)
+
+        ControlClick "x40 y404", SOHwnd, , , , "NA" ; Click Description
+        Sleep(200)
+
+        MsgBox("ดำเนินการสำเร็จ `n`nกด Ctrl+N เพื่อใส่ข้อมูลออเดอร์ถัดไป...")
+        KeyWait "Control", "D"
+        KeyWait "n", "D"
+    }
 }
+
+
 
 class CreateFormData {
 
