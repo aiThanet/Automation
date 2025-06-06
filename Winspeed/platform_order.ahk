@@ -19,7 +19,8 @@ SOHwnd := ""
 {
     global orders, orderIdx, SOHwnd
 
-    checkWinActive()
+    if (!checkWinActive())
+        return
 
     SelectedFile := FileSelect(3, , "Open a file", "Excel (*.xlsx)")
     if (!selectedFile) {
@@ -63,7 +64,8 @@ SOHwnd := ""
 {
     global orders, orderIdx, SOHwnd
 
-    checkWinActive()
+    if (!checkWinActive())
+        return
 
     if (orders.Length = 0) {
         MsgBox("ไม่มีออเดอร์ให้ดำเนินการ", "Error", "Iconx")
@@ -144,7 +146,7 @@ checkWinActive() {
     global SOHwnd
     if not WinExist(WinspeedClass) {
         MsgBox("โปรแกรม Winspeed ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
-        return ; Exit the script if the window isn't found
+        return false ; Exit the script if the window isn't found
     }
 
     HWNDs := WinGetList(WinspeedClass)
@@ -160,10 +162,12 @@ checkWinActive() {
 
     if (SOHwnd = "") {
         MsgBox("หน้าต่าง " . SOWindowTitle . " ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
-        return
+        return false
     }
 
     WinActivate(SOHwnd)
+
+    return true
 }
 
 class CreateFormData {
