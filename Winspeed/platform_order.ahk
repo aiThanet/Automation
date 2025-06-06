@@ -11,31 +11,15 @@ SetControlDelay 0
 CustField := "Edit70" ; Customer ID field
 SOWindowTitle := "ขายเชื่อ"
 WinspeedClass := "ahk_class FNWND380"
+orders := []
+orderIdx := 0
+SOHwnd := ""
 
 ^l::
 {
-    if not WinExist(WinspeedClass) {
-        MsgBox("โปรแกรม Winspeed ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
-        return ; Exit the script if the window isn't found
-    }
+    global orders, orderIdx, SOHwnd
 
-    HWNDs := WinGetList(WinspeedClass)
-    SOHwnd := ''
-    for hwnd in HWNDs {
-        winspeedTitle := WinGetTitle(hwnd)
-        if (winspeedTitle = SOWindowTitle) {
-            WinActivate(hwnd)
-            SOHwnd := hwnd
-            break
-        }
-    }
-
-    if (SOHwnd = '') {
-        MsgBox("หน้าต่าง " . SOWindowTitle . " ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
-        return
-    }
-
-    WinActivate(SOHwnd)
+    checkWinActive()
 
     SelectedFile := FileSelect(3, , "Open a file", "Excel (*.xlsx)")
     if (!selectedFile) {
@@ -69,72 +53,118 @@ WinspeedClass := "ahk_class FNWND380"
 
     response_obj := jxon_load(&resText)
     total_orders := response_obj.Length
+    orders := response_obj
+    orderIdx := 1
 
-    text_b := Jxon_Dump(response_obj)
-
-    MsgBox("จำนวนออเดอร์ทั้งหมด: " . total_orders)
-
-    for index, order in response_obj {
-        order_id := order["order_id"]
-        cust_id := order["cust_id"]
-        platform := order["platform"]
-        store := order["store"]
-        items := order["items"]
-
-        MsgBox("Order ที่ " . index . " / " . total_orders . "`nOrder ID: " . order_id . "`n`nแพลตฟอร์ม: " . platform . "`nร้าน: " . store . "`n`nจำนวนรายการสินค้า: " . items.Length)
-
-        ControlFocus("Edit70", SOHwnd)
-        ControlSend(cust_id . "{Enter}", "Edit70", SOHwnd) ; Customer ID
-        Sleep(200)
-
-        ControlClick "x588 y50", SOHwnd, , , , "NA" ; Run Bill Code
-        Sleep(200)
-
-        ControlFocus "Edit10", SOHwnd
-        Sleep(500)
-
-        loop items.Length {
-            index := A_Index
-            item := items[index]
-
-            valueToSend := item["goodcode"]
-            
-            if(valueToSend = ""){
-                MsgBox("รายการสินค้า: " . item["sku"] . "`nจำนวน: " . item["quantity"] . "`n`nกด Ctrl+N เพื่อใส่ข้อมูลต่อไป...", "ไม่พบรหัสสินค้า", "Iconx")
-                KeyWait "Control", "D"
-                KeyWait "n", "D"
-            } else {
-                SendText(valueToSend)
-                Sleep(100)
-
-                loop 5
-                    Send("{Enter}")
-
-                SendText(item["qty"])
-                Sleep(100)
-
-                loop 4
-                    Send("{Enter}")
-            }
-        }
-
-        ControlClick "x160 y404", SOHwnd, , , , "NA" ; Click Description
-        Sleep(200)
-
-        ControlFocus("Edit38", SOHwnd)
-        ControlSendText(platform . ":" . order_id, "Edit38", SOHwnd) ; Customer ID
-        Sleep(200)
-
-        ControlClick "x40 y404", SOHwnd, , , , "NA" ; Click Description
-        Sleep(200)
-
-        MsgBox("ดำเนินการสำเร็จ `n`nกด Ctrl+N เพื่อใส่ข้อมูลออเดอร์ถัดไป...")
-        KeyWait "Control", "D"
-        KeyWait "n", "D"
-    }
+    MsgBox("จำนวนออเดอร์ทั้งหมด: " . total_orders . "`n`n กด Ctrl+N เพื่อเริ่มใส่ข้อมูลออเดอร์...")
 }
 
+^n::
+{
+    global orders, orderIdx, SOHwnd
 
+    checkWinActive()
+
+    if (orders.Length = 0) {
+        MsgBox("ไม่มีออเดอร์ให้ดำเนินการ", "Error", "Iconx")
+        return
+    }
+    if (orderIdx > orders.Length) {
+        MsgBox("ดำเนินการเสร็จสิ้นแล้ว", "Info", "Iconx")
+        return
+    }
+
+    order := orders[orderIdx]
+    total_orders := orders.Length
+
+    order_id := order["order_id"]
+    cust_id := order["cust_id"]
+    platform := order["platform"]
+    store := order["store"]
+    items := order["items"]
+
+    MsgBox("Order ที่ " . orderIdx . " / " . total_orders . "`nOrder ID: " . order_id . "`n`nแพลตฟอร์ม: " .
+        platform .
+        "`nร้าน: " . store . "`n`nจำนวนรายการสินค้า: " . items.Length)
+
+    ControlFocus("Edit70", SOHwnd)
+    ControlSend(cust_id . "{Enter}", "Edit70", SOHwnd) ; Customer ID
+    Sleep(200)
+
+    ControlClick "x588 y50", SOHwnd, , , , "NA" ; Run Bill Code
+    Sleep(200)
+
+    ControlFocus "Edit10", SOHwnd
+    Sleep(500)
+
+    loop items.Length {
+        index := A_Index
+        item := items[index]
+
+        valueToSend := item["goodcode"]
+
+        if (valueToSend = "") {
+            MsgBox("รายการสินค้า: " . item["sku"] . "`nจำนวน: " . item["quantity"] .
+                "`n`nกด F5 เพื่อใส่ข้อมูลต่อไป...", "ไม่พบรหัสสินค้า", "Iconx")
+            KeyWait "F5", "D"
+        } else {
+            SendText(valueToSend)
+            Sleep(100)
+
+            loop 5 {
+                Send("{Enter}")
+                Sleep(100)
+            }
+
+            SendText(item["qty"])
+            Sleep(100)
+
+            loop 4
+                Send("{Enter}")
+        }
+    }
+
+    ControlClick "x160 y404", SOHwnd, , , , "NA" ; Click Description
+    Sleep(200)
+
+    ControlFocus("Edit38", SOHwnd)
+    ControlSendText(platform . ":" . order_id, "Edit38", SOHwnd) ; Customer ID
+    Sleep(200)
+
+    ControlClick "x40 y404", SOHwnd, , , , "NA" ; Click Description
+    Sleep(200)
+
+    MsgBox("ดำเนินการสำเร็จ `n`nกด Ctrl+N เพื่อใส่ข้อมูลออเดอร์ถัดไป...")
+
+    orderIdx := orderIdx + 1
+
+}
+
+checkWinActive() {
+    global SOHwnd
+    if not WinExist(WinspeedClass) {
+        MsgBox("โปรแกรม Winspeed ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
+        return ; Exit the script if the window isn't found
+    }
+
+    HWNDs := WinGetList(WinspeedClass)
+    SOHwnd := ""
+    for hwnd in HWNDs {
+        winspeedTitle := WinGetTitle(hwnd)
+        if (winspeedTitle = SOWindowTitle) {
+            WinActivate(hwnd)
+            SOHwnd := hwnd
+            break
+        }
+    }
+
+    if (SOHwnd = "") {
+        MsgBox("หน้าต่าง " . SOWindowTitle . " ไม่ได้ถูกเปิดใช้งาน", "Error", "Iconx")
+        return
+    }
+
+    WinActivate(SOHwnd)
+}
 
 class CreateFormData {
 
