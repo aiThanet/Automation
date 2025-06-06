@@ -121,7 +121,7 @@ SOHwnd := ""
             SendText(item["qty"])
             Sleep(100)
 
-            loop 4
+            loop 1
                 Send("{Enter}")
         }
     }
