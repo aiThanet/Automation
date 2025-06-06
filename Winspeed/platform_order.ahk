@@ -29,7 +29,7 @@ SOHwnd := ""
     }
 
     ; Prepare the HTTP request
-    apiUrl := "http://localhost:3100/ecom/upload/bigseller"
+    apiUrl := "http://mathongapi.jpn.local/ecom/upload/bigseller"
 
     ; Create COM object for HTTP request
     req := ComObject("WinHttp.WinHttpRequest.5.1")
