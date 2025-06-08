@@ -15,6 +15,12 @@ orders := []
 orderIdx := 0
 SOHwnd := ""
 
+apiUrl := "http://mathongapi.jpn.local/ecom/upload/bigseller"
+; apiUrl := "http://localhost:3100/ecom/upload/bigseller"
+n_loop_enter := 1
+; n_loop_enter := 4
+
+
 ^l::
 {
     global orders, orderIdx, SOHwnd
@@ -27,9 +33,6 @@ SOHwnd := ""
         MsgBox("กรุณาเลือกไฟล์", "Error", "Iconx")
         return
     }
-
-    ; Prepare the HTTP request
-    apiUrl := "http://mathongapi.jpn.local/ecom/upload/bigseller"
 
     ; Create COM object for HTTP request
     req := ComObject("WinHttp.WinHttpRequest.5.1")
@@ -82,6 +85,9 @@ SOHwnd := ""
     order_id := order["order_id"]
     cust_id := order["cust_id"]
     platform := order["platform"]
+    logistic := order["logistic"]
+    delivery_method := order["delivery_method"]
+    confirm_time := order["confirm_time"]
     store := order["store"]
     items := order["items"]
 
@@ -121,18 +127,34 @@ SOHwnd := ""
             SendText(item["qty"])
             Sleep(100)
 
-            loop 1
+            loop n_loop_enter
                 Send("{Enter}")
         }
     }
 
     ControlClick "x160 y404", SOHwnd, , , , "NA" ; Click Description
-    Sleep(200)
+    Sleep(500)
 
     ControlFocus("Edit38", SOHwnd)
-    ControlSendText(platform . ":" . order_id, "Edit38", SOHwnd) ; Customer ID
+    Sleep(200)
+    
+    SendText(platform . ":" . order_id)
     Sleep(200)
 
+    Send("{Enter}")
+    Sleep(200)
+
+    delivery_method_msg := delivery_method="" ? "" : (" (" . delivery_method . ")")
+    logistic_msg := "Logistic: " . logistic . delivery_method_msg
+    SendText(logistic_msg)
+    Sleep(200)
+
+    Send("{Enter}")
+    Sleep(200)
+
+    SendText("Confirm time: " . confirm_time)
+    Sleep(200)
+            
     ControlClick "x40 y404", SOHwnd, , , , "NA" ; Click Description
     Sleep(200)
 
