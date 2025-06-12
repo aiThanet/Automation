@@ -89,10 +89,13 @@ n_loop_enter := 1
     confirm_time := order["confirm_time"]
     store := order["store"]
     items := order["items"]
+    delivery_method_msg := delivery_method = "" ? "" : (" (" . delivery_method . ")")
+    logistic_msg := "Logistic: " . logistic . delivery_method_msg
 
     MsgBox("Order ที่ " . orderIdx . " / " . total_orders . "`nOrder ID: " . order_id . "`n`nแพลตฟอร์ม: " .
         platform .
-        "`nร้าน: " . store . "`n`nจำนวนรายการสินค้า: " . items.Length)
+        "`nร้าน: " . store . "`n`nจำนวนรายการสินค้า: " . items.Length . "`n`n" . logistic_msg . "`nConfirm time: " .
+        confirm_time)
 
     ControlFocus("Edit70", SOHwnd)
     ControlSend(cust_id . "{Enter}", "Edit70", SOHwnd) ; Customer ID
@@ -143,8 +146,6 @@ n_loop_enter := 1
     Send("{Enter}")
     Sleep(200)
 
-    delivery_method_msg := delivery_method = "" ? "" : (" (" . delivery_method . ")")
-    logistic_msg := "Logistic: " . logistic . delivery_method_msg
     SendText(logistic_msg)
     Sleep(200)
 
