@@ -39,8 +39,7 @@ global response_obj := {} ; Initialize response object
 
     WinActivate(SOHwnd)
 
-    orderId := InputBox("กรุณาใส่ตัวเลข18หลัก", "ใส่ Order ID", "w200 h100")
-    ; Check if orderId is an 18-digit number
+    orderId := InputBox("กรุณาใส่ตัวเลข15-20หลัก", "ใส่ Order ID", "w200 h100")
     if !RegExMatch(orderId.Value, "^\d{15,20}$") {
         MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข15-20หลัก", "Error", "Iconx")
         return

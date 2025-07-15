@@ -97,11 +97,13 @@ n_loop_enter := 1
         "`nร้าน: " . store . "`n`nจำนวนรายการสินค้า: " . items.Length . "`n`n" . logistic_msg . "`nConfirm time: " .
         confirm_time)
 
-    ControlFocus("Edit70", SOHwnd)
-    ControlSend(cust_id . "{Enter}", "Edit70", SOHwnd) ; Customer ID
+    ; ControlFocus("Edit70", SOHwnd)
+    ControlClick "x100 y70", SOHwnd, , , , "NA"
+    Sleep(200)
+    SendInput(cust_id . "{Enter}")
     Sleep(200)
 
-    ControlClick "x588 y50", SOHwnd, , , , "NA" ; Run Bill Code
+    SendInput("ON")
     Sleep(200)
 
     ControlFocus "Edit10", SOHwnd
