@@ -208,8 +208,11 @@ NormalizeLiffOrder(raw) {
             "winspeed_good_code", el.Get("GoodCode", ""),
             "winspeed_good_name", el.Get("GoodMarketName", "")))
     return Map("items", items, "link_so", [],
-        ; user selects the WINSPEED customer by hand (cust_id "" → TypePage skips it); show the LINE name instead
-        "cust_id", "", "cust_code", "(LINE)", "cust_name", raw.Get("line_display_name", "") . " — เลือกลูกค้าใน Winspeed เอง",
+        ; API resolves a linked customer (shopName "CODE : NAME") to its WINSPEED CustID → typed like mathong-system.
+        ; Not linked: cust_id "" → TypePage skips it, user selects the customer in WINSPEED.
+        "cust_id", raw.Get("cust_id", ""), "cust_code", raw.Get("cust_code", ""),
+        "cust_name", raw.Get("cust_id", "") != "" ? raw.Get("cust_name", "") : "— เลือกลูกค้าใน Winspeed เอง",
+        "line_name", raw.Get("line_display_name", ""),
         "status", raw.Get("isConfirm", false) ? "ยืนยันแล้ว" : "ยังไม่ยืนยัน",
         "rec_updated_when", raw.Get("updatedAt", ""))
 }
@@ -299,6 +302,7 @@ ShowPageGui(order, id, SOHwnd) {
     W := Round((colsW + 4) * 96 / A_ScreenDPI)
     g.Add("Text", "w" . W, (SubStr(id, 1, 5) = "liff/" ? "[LINE OA] " : "[Mathong System] ") . "ลูกค้า: " . order.Get("cust_code", "") . " " . order.Get("cust_name", "") . "    สถานะ: " .
     order.Get("status", "")
+    . (order.Has("line_name") ? "`nชื่อไลน์: " . order["line_name"] : "")
     . "`nอัพเดต: " . SubStr(order["rec_updated_when"], 1, 19) . "    สินค้า: " . items.Length . " รายการ / " .
     totalPage . " หน้า")
     pages := g.Add("ListView", "w" . W . " r5 -Multi NoSortHdr", ["หน้า", "รายการที่", "สถานะ"])

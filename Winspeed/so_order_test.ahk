@@ -56,8 +56,13 @@ n := NormalizeLiffOrder(liffRaw)
 it := n["items"][1]
 Check(it["good_id_correction"] = "5341" && it["good_code_correction"] = "HG22-04" && it["quantity"] = 20, "liff item ids/qty")
 Check(it["winspeed_good_code"] = "HG22-04" && it["winspeed_good_name"] = "เครื่องทดสอบ", "liff item display")
-; LIFF: user picks the WINSPEED customer by hand → never typed; header shows the LINE name
-Check(n["cust_id"] = "" && InStr(n["cust_code"] . " " . n["cust_name"], "สมชาย LINE"), "liff: no cust_id, LINE name shown")
+; LIFF without linked customer: user picks it in WINSPEED (cust_id "" → not typed); LINE name kept separately
+Check(n["cust_id"] = "" && n["line_name"] = "สมชาย LINE", "liff unlinked: no cust_id, LINE name")
+; LIFF with linked customer (API resolved shopName "CODE : NAME" → WINSPEED CustID): typed like mathong-system
+liffRaw["cust_id"] := 9041, liffRaw["cust_code"] := "N0200-AR", liffRaw["cust_name"] := "บริษัท ทดสอบ จำกัด"
+n2 := NormalizeLiffOrder(liffRaw)
+Check(n2["cust_id"] = 9041 && n2["cust_code"] = "N0200-AR" && n2["cust_name"] = "บริษัท ทดสอบ จำกัด", "liff linked customer")
+Check(n2["line_name"] = "สมชาย LINE", "liff linked keeps LINE name")
 Check(n["rec_updated_when"] = "2026-11-23 04:13:47.504000+00:00" && n["link_so"].Length = 0, "liff updated/link_so")
 
 ; test_is_copy_title: compiled exe main window title is the bare path; .ahk is "path - AutoHotkey v2..."
