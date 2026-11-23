@@ -17,12 +17,64 @@ CODE_CONTROL := "Edit12"   ; SO grid: product code cell
 QTY_CONTROL := "PBEDIT807" ; SO grid: quantity cell (next are PBEDIT808 price, Edit18 discount)
 MAX_ENTER := 8             ; max Enter presses to reach the next field before giving up
 FIELD_DELAY := 30          ; ms settle time after the cursor moved to a new field
-COLS := [30, 100, 150, 50] ; product list column widths (px): #, รหัสสินค้า, ชื่อสินค้า, จำนวน — window width follows
+COLS := [36, 110, 190, 60] ; product list column widths (px): #, รหัสสินค้า, ชื่อสินค้า, จำนวน — window width follows
 FIELD_TIMEOUT := 3000      ; ms max wait for WINSPEED to move the cursor after one Enter (product lookup)
 global typing := false
 global abortTyping := false
 global pageGui := "" ; the open order window, if any
 global pageOrderId := "" ; order ID shown in pageGui
+global enterActions := Map() ; window hwnd → function run by Enter (coloured "buttons" are Text controls, not Default buttons)
+global T := Theme()
+
+; Colours from mathong-backoffice app/themes (LightTheme.ts / DarkTheme.ts). Dark follows Windows app mode.
+Theme() {
+    dark := false
+    try dark := RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme") = 0
+    return dark
+        ? Map("dark", true, "paper", "162130", "ink", "E7EDF5", "ink2", "9FAEC2", "rail", "0A1018",
+            "railText", "E7EDF5", "railMeta", "9FAEC2", "blue", "7FA8F5", "blueWash", "1D2C48",
+            "accent", "FB8A4C", "onAccent", "0D131C", "teal", "5CC6D6", "tealWash", "12343A",
+            "ok", "5BD28B", "okWash", "123323", "warn", "F4B54C", "warnWash", "3A2A0E", "bad", "FF8B7E")
+        : Map("dark", false, "paper", "FFFFFF", "ink", "0F1A2A", "ink2", "4E5B6E", "rail", "1D2B3F",
+            "railText", "E7EDF5", "railMeta", "B9C6D8", "blue", "1556C9", "blueWash", "E3ECFB",
+            "accent", "C2410C", "onAccent", "FFFFFF", "teal", "0F6E7F", "tealWash", "E0F1F4",
+            "ok", "127A3E", "okWash", "DDF3E5", "warn", "9A5B00", "warnWash", "FFF0D6", "bad", "B42318")
+}
+
+; Window colours + font (Leelawadee UI = Thai UI font on Win10/11; Tahoma kept if it is missing)
+ThemeGui(g) {
+    g.BackColor := T["paper"]
+    g.SetFont("s11 norm c" . T["ink"], "Tahoma")
+    g.SetFont(, "Leelawadee UI")
+    if T["dark"] ; dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE)
+        DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", g.Hwnd, "UInt", 20, "Int*", 1, "UInt", 4)
+}
+
+; Dark scrollbars/header/edit/button skins; light mode keeps the normal Windows look
+DarkSkin(ctrl, name := "DarkMode_Explorer") {
+    if T["dark"]
+        DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", name, "Ptr", 0)
+}
+
+; Column header stays light: every dark header theme draws black (unreadable) header text
+LVOpts() {
+    return " +LV0x20 Background" . T["paper"] . " c" . T["ink"] ; LVS_EX_FULLROWSELECT
+}
+
+; The one orange action of a window. Enter runs it while that window is active.
+AddPrimary(g, opts, text, fn) {
+    g.SetFont("bold c" . T["onAccent"])
+    b := g.Add("Text", opts . " +Center +0x200 Background" . T["accent"], text) ; SS_CENTERIMAGE: centred vertically
+    g.SetFont("norm c" . T["ink"])
+    b.OnEvent("Click", fn)
+    enterActions[g.Hwnd] := fn
+    return b
+}
+
+BGR(hex) {
+    n := Integer("0x" . hex)
+    return ((n & 0xFF) << 16) | (n & 0xFF00) | (n >> 16)
+}
 
 ; --- Startup: backoffice button opens mathong-so://<order id> ---
 linkId := A_Args.Length ? ParseProtocolId(A_Args[1]) : ""
@@ -50,6 +102,12 @@ if (linkId != "")
 Esc:: {
     global abortTyping := true
 }
+#HotIf
+
+; Enter = the window's orange button (replaces the old Default button)
+#HotIf !typing && enterActions.Has(WinActive("A"))
+Enter::
+NumpadEnter:: enterActions[WinActive("A")]()
 #HotIf
 
 ^l:: OpenOrder()
@@ -128,6 +186,7 @@ OpenOrder(id := "") {
 }
 
 OpenOrderOnce(id) {
+    global T := Theme() ; pick up a Windows light/dark switch since the last order
     ; Only one order window at a time: bring the open one to front (close it to load another order)
     if pageGui {
         pageGui.Show()
@@ -175,20 +234,35 @@ AskOrderKey() {
     ; Prefill from clipboard (backoffice "copy order id" button)
     clip := Trim(A_Clipboard)
     d := Gui("+AlwaysOnTop -MinimizeBox", "ใส่ Order ID")
-    d.Add("Text", , "Order มาจาก:")
-    mathong := d.Add("Radio", "Checked", "Mathong System")
-    d.Add("Radio", "x+20", "LINE OA (LIFF)")
-    d.Add("Text", "xm", "Order ID (ตัวเลข 15-20 หลัก):")
-    edit := d.Add("Edit", "xm w220", RegExMatch(clip, "^\d{15,20}$") ? clip : "")
-    ok := d.Add("Button", "xm w105 Default", "OK")
-    cancel := d.Add("Button", "x+10 w105", "Cancel")
+    ThemeGui(d)
+    d.MarginX := 16, d.MarginY := 14
+    radioOpt := T["dark"] ? " -Theme" : "" ; themed radios ignore the text colour → black on dark
+    d.SetFont("s10 bold c" . T["ink2"])
+    d.Add("Text", , "Order มาจาก")
+    d.SetFont("s11 norm c" . T["ink"])
+    mathong := d.Add("Radio", "xm y+6 Checked" . radioOpt, "Mathong System")
+    d.Add("Radio", "x+24 yp" . radioOpt, "LINE OA (LIFF)")
+    d.SetFont("s10 bold c" . T["ink2"])
+    d.Add("Text", "xm y+14", "Order ID  (ตัวเลข 15–20 หลัก)")
+    d.SetFont("s11 norm c" . T["ink"])
+    edit := d.Add("Edit", "xm y+6 w280 Background" . T["paper"], RegExMatch(clip, "^\d{15,20}$") ? clip : "")
+    DarkSkin(edit, "DarkMode_CFD")
+    cancel := d.Add("Button", "xm y+16 w135 h40", "ยกเลิก (Esc)")
+    DarkSkin(cancel)
     result := ""
-    ok.OnEvent("Click", (*) => (result := (mathong.Value ? "" : "liff/") . Trim(edit.Value), d.Destroy()))
+    OnOk(*) {
+        result := (mathong.Value ? "" : "liff/") . Trim(edit.Value)
+        d.Destroy()
+    }
+    AddPrimary(d, "x+10 yp w135 h40", "ตกลง (Enter)", OnOk)
     cancel.OnEvent("Click", (*) => d.Destroy())
     d.OnEvent("Close", (*) => d.Destroy())
     d.OnEvent("Escape", (*) => d.Destroy())
+    hwnd := d.Hwnd
     d.Show()
-    WinWaitClose(d.Hwnd)
+    edit.Focus()
+    WinWaitClose(hwnd)
+    enterActions.Delete(hwnd)
     if (result != "" && !IsOrderKey(result)) {
         MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข15-20หลัก", "Error", "Iconx")
         return ""
@@ -222,8 +296,10 @@ FetchOrder(key) {
     id := isLiff ? SubStr(key, 6) : key
     url := isLiff ? LIFF_API_URL . id : API_URL . id
     loading := Gui("+AlwaysOnTop -SysMenu +ToolWindow", "Loading")
-    loading.Add("Text", "w260", "กำลังดึงข้อมูล Order " . id . " ...")
-    bar := loading.Add("Progress", "w260 h16 +0x8") ; PBS_MARQUEE
+    ThemeGui(loading)
+    loading.MarginX := 16, loading.MarginY := 14
+    loading.Add("Text", "w320", "กำลังดึงข้อมูล Order " . id . " ...")
+    bar := loading.Add("Progress", "w320 h8 y+10 +0x8") ; PBS_MARQUEE
     SendMessage(0x40A, 1, 30, bar) ; PBM_SETMARQUEE: start animation
     loading.Show()
     try {
@@ -294,21 +370,75 @@ ShowPageGui(order, id, SOHwnd) {
     totalPage := Ceil(items.Length / MAXITEMPERPAGE)
 
     g := Gui("+AlwaysOnTop", "Order " . id)
-    g.MarginX := 15
-    g.MarginY := 15
+    ThemeGui(g)
+    M := 12
+    g.MarginX := M
+    g.MarginY := M
     ; Width = columns + 4px ListView border (no vertical scrollbar: page has max 14 rows = r14).
     ; Columns are pixels, GUI units are DPI-scaled.
     colsW := COLS[1] + COLS[2] + COLS[3] + COLS[4]
     W := Round((colsW + 4) * 96 / A_ScreenDPI)
-    g.Add("Text", "w" . W, (SubStr(id, 1, 5) = "liff/" ? "[LINE OA] " : "[Mathong System] ") . "ลูกค้า: " . order.Get("cust_code", "") . " " . order.Get("cust_name", "") . "    สถานะ: " .
-    order.Get("status", "")
-    . (order.Has("line_name") ? "`nชื่อไลน์: " . order["line_name"] : "")
-    . "`nอัพเดต: " . SubStr(order["rec_updated_when"], 1, 19) . "    สินค้า: " . items.Length . " รายการ / " .
-    totalPage . " หน้า")
-    pages := g.Add("ListView", "w" . W . " r5 -Multi NoSortHdr", ["หน้า", "รายการที่", "สถานะ"])
-    btn := g.Add("Button", "w" . W . " h40 Default", "คีย์หน้านี้   (กด Esc เพื่อหยุดระหว่างคีย์)")
-    toggle := g.Add("Button", "w" . W . " Left", "▼ รายการสินค้า")
-    preview := g.Add("ListView", "w" . W . " r14 NoSortHdr", ["#", "รหัสสินค้า", "ชื่อสินค้า", "จำนวน"])
+
+    ; --- Header band (dark rail): source + status chips, customer, LINE name / updated / item count ---
+    rail := " Background" . T["rail"]
+    isLiff := SubStr(id, 1, 5) = "liff/"
+    g.SetFont("s10 bold c" . (isLiff ? T["ok"] : T["teal"]))
+    g.Add("Text", "x" . M . " y" . M . " Background" . (isLiff ? T["okWash"] : T["tealWash"]),
+        isLiff ? " LINE OA " : " Mathong System ")
+    status := order.Get("status", "")
+    if (status != "") {
+        kind := status = "ยืนยันแล้ว" ? "ok" : InStr(status, "ยังไม่") ? "warn" : "blue"
+        g.SetFont("c" . T[kind])
+        g.Add("Text", "x+6 yp Background" . T[kind . "Wash"], " " . status . " ")
+    }
+    code := order.Get("cust_code", ""), name := order.Get("cust_name", "")
+    g.SetFont("s13 bold c" . T["railText"])
+    g.Add("Text", "x" . M . " y+6 w" . W . rail, (code != "" ? code . " · " : "") . name)
+    g.SetFont("s10 norm c" . T["railMeta"])
+    meta := g.Add("Text", "x" . M . " y+4 w" . W . rail,
+        (order.Has("line_name") ? "ชื่อไลน์: " . order["line_name"] . "`n" : "")
+        . "อัพเดต " . SubStr(order["rec_updated_when"], 1, 19) . "   ·   "
+        . items.Length . " รายการ / " . totalPage . " หน้า")
+    meta.GetPos(, &my, , &mh)
+    bandH := my + mh + M
+    ; Added last + WS_CLIPSIBLINGS so the band never paints over the labels above
+    g.Add("Text", "x0 y0 w" . (W + 2 * M) . " h" . bandH . " +0x4000000" . rail)
+    g.SetFont("s11 norm c" . T["ink"])
+
+    pages := g.Add("ListView", "x" . M . " y" . (bandH + M) . " w" . W . " r5 -Multi NoSortHdr" . LVOpts(),
+        ["หน้า", "รายการที่", "สถานะ"])
+    DarkSkin(pages)
+    btn := AddPrimary(g, "x" . M . " y+12 w" . W . " h44", "คีย์หน้า 1", OnConfirm)
+    g.SetFont("s10 c" . T["ink2"])
+    g.Add("Text", "x" . M . " y+4 w" . W . " Center", "Enter = เริ่มคีย์   ·   Esc = หยุดระหว่างคีย์")
+    g.SetFont("s11 c" . T["blue"])
+    toggle := g.Add("Text", "x" . M . " y+10 w" . W, "▼ รายการสินค้า")
+    g.SetFont("c" . T["ink"])
+    preview := g.Add("ListView", "x" . M . " y+4 w" . W . " r14 NoSortHdr" . LVOpts(),
+        ["#", "รหัสสินค้า", "ชื่อสินค้า", "จำนวน"])
+    DarkSkin(preview)
+    g.MarginX := 0 ; AutoSize adds MarginX after the right-most control: the full-width band already ends at the edge
+    preview.ModifyCol(1, "Integer"), preview.ModifyCol(4, "Integer") ; numbers right-aligned
+    kinds := [] ; per page: "ok" | "bad" | "idle" → colour of the สถานะ cell
+    shownPage := 1
+
+    ; Colour the สถานะ column (NM_CUSTOMDRAW). Offsets: NMLVCUSTOMDRAW on 64/32-bit.
+    PagesDraw(ctrl, lParam) {
+        P := A_PtrSize
+        stage := NumGet(lParam, 3 * P, "UInt")
+        if (stage = 1 || stage = 0x10001) ; CDDS_PREPAINT / ITEMPREPAINT → ask for each item / sub-item
+            return 0x20
+        if (stage = 0x30001) { ; CDDS_ITEMPREPAINT | CDDS_SUBITEM
+            row := NumGet(lParam, 5 * P + 16, "UPtr") + 1
+            sub := NumGet(lParam, P = 8 ? 88 : 56, "Int")
+            k := (sub = 2 && row <= kinds.Length) ? kinds[row] : ""
+            NumPut("UInt", BGR(k = "ok" ? T["ok"] : k = "bad" ? T["bad"] : k = "idle" ? T["ink2"] : T["ink"]),
+                lParam, P = 8 ? 80 : 48) ; clrText
+            return 0x2 ; CDRF_NEWFONT
+        }
+        return 0
+    }
+    pages.OnNotify(-12, PagesDraw)
 
     ; Show at top-right of the work area (pixels, excludes taskbar)
     Place() {
@@ -318,24 +448,29 @@ ShowPageGui(order, id, SOHwnd) {
         WinMove(right - gw, top, , , g.Hwnd)
     }
 
+    ToggleText() {
+        toggle.Text := (preview.Visible ? "▼" : "▶") . " รายการสินค้า หน้า " . shownPage
+    }
+
     OnToggle(*) {
-        show := !preview.Visible
-        preview.Visible := show
-        toggle.Text := (show ? "▼" : "▶") . " รายการสินค้า"
+        preview.Visible := !preview.Visible
+        ToggleText()
         Place()
     }
 
     Refresh(selectRow) {
         pages.Delete()
+        kinds.Length := 0
         loop totalPage {
             first := (A_Index - 1) * MAXITEMPERPAGE + 1
             last := Min(A_Index * MAXITEMPERPAGE, items.Length)
             done := IniRead(DONE_INI, id, "p" . A_Index, "")
-            status := (done = "") ? "" : (SubStr(done, 1, 4) = "ERR ") ? "✗ คีย์ไม่สำเร็จ " . SubStr(done, 5) :
+            kinds.Push((done = "") ? "idle" : (SubStr(done, 1, 4) = "ERR ") ? "bad" : "ok")
+            status := (done = "") ? "○ ยังไม่คีย์" : (SubStr(done, 1, 4) = "ERR ") ? "✗ คีย์ไม่สำเร็จ " . SubStr(done, 5) :
                 "✓ คีย์แล้ว " . done
-            pages.Add(A_Index = selectRow ? "Select Focus" : "", A_Index, first . " - " . last, status)
+            pages.Add(A_Index = selectRow ? "Select Focus" : "", A_Index, first . " – " . last, status)
         }
-        pages.ModifyCol(1, 40), pages.ModifyCol(2, 80), pages.ModifyCol(3, colsW - 40 - 80)
+        pages.ModifyCol(1, 50), pages.ModifyCol(2, 90), pages.ModifyCol(3, colsW - 50 - 90)
         ShowPreview(selectRow)
     }
 
@@ -343,6 +478,9 @@ ShowPageGui(order, id, SOHwnd) {
         preview.Delete()
         first := (page - 1) * MAXITEMPERPAGE + 1
         last := Min(page * MAXITEMPERPAGE, items.Length)
+        shownPage := page
+        btn.Text := "คีย์หน้า " . page . "  (รายการ " . first . "–" . last . ")"
+        ToggleText()
         loop last - first + 1 {
             i := first + A_Index - 1
             el := items[i]
@@ -400,7 +538,6 @@ ShowPageGui(order, id, SOHwnd) {
     }
 
     pages.OnEvent("ItemSelect", (ctrl, row, selected) => selected ? ShowPreview(row) : "")
-    btn.OnEvent("Click", OnConfirm)
     toggle.OnEvent("Click", OnToggle)
     g.OnEvent("Close", OnClose)
     Refresh(1)
@@ -411,6 +548,7 @@ ShowPageGui(order, id, SOHwnd) {
         global pageGui, pageOrderId
         if (pageGui = g) ; an older window must not clear the newer one
             pageGui := "", pageOrderId := ""
+        enterActions.Delete(g.Hwnd)
         g.Destroy()
     }
 }
