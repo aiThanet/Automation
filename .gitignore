@@ -1,2 +1,5 @@
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Ahk2Exe compiler (downloaded tool, used by Winspeed/compile_so.sh)
+/tools/

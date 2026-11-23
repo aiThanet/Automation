@@ -1,5 +1,5 @@
 ﻿; --- Import Libraries ---
-#SingleInstance Force
+#SingleInstance Off ; a mathong-so:// link starts a 2nd copy; it hands the order ID to the running copy and exits
 #Requires AutoHotkey v2.0
 #Include _JXON.ahk ; Ensure you have the JSON library available in your script directory
 
@@ -10,7 +10,8 @@ SetControlDelay 0
 MAXITEMPERPAGE := 14
 SOWindowTitle := "ใบสั่งขาย"
 WinspeedClass := "ahk_class FNWND380"
-API_URL := "http://mathongapi.jpn.local/linebot/order?linebot_order_id="
+API_URL := "http://mathongapi.jpn.local/linebot/order?linebot_order_id="  ; mathong-system order
+LIFF_API_URL := "http://mathongapi.jpn.local/firebase/liff/order?id="       ; LINE OA (LIFF) order
 DONE_INI := A_ScriptDir "\so_order_done.ini" ; remembers which pages were typed per order
 CODE_CONTROL := "Edit12"   ; SO grid: product code cell
 QTY_CONTROL := "PBEDIT807" ; SO grid: quantity cell (next are PBEDIT808 price, Edit18 discount)
@@ -21,6 +22,28 @@ FIELD_TIMEOUT := 3000      ; ms max wait for WINSPEED to move the cursor after o
 global typing := false
 global abortTyping := false
 global pageGui := "" ; the open order window, if any
+global pageOrderId := "" ; order ID shown in pageGui
+
+; --- Startup: backoffice button opens mathong-so://<order id> ---
+linkId := A_Args.Length ? ParseProtocolId(A_Args[1]) : ""
+if (A_Args.Length && linkId = "")
+    ExitApp ; malformed/hostile link: do nothing
+OnMessage(0x4A, OnCopyData) ; WM_COPYDATA from a 2nd copy (registered first: a link may arrive right away)
+; Named mutex decides which copy stays: a window scan alone lets 2 copies started together both exit.
+DllCall("CreateMutex", "Ptr", 0, "Int", 0, "Str", "Local\mathong-so-order:" . StrReplace(A_ScriptFullPath, "\", "/"))
+if (A_LastError = 183) { ; ERROR_ALREADY_EXISTS → another copy is the main one
+    loop 30 { ; its main window may still be starting
+        if (other := FindOtherCopy()) {
+            SendOrderId(other, linkId) ; running copy opens it (or just shows its window)
+            break
+        }
+        Sleep(100)
+    }
+    ExitApp
+}
+RegisterProtocol()
+if (linkId != "")
+    SetTimer(() => OpenOrder(linkId), -1)
 
 ; Esc stops typing only while a page is being typed
 #HotIf typing
@@ -29,13 +52,87 @@ Esc:: {
 }
 #HotIf
 
-^l::
-{
-    ; Only one order window at a time: bring the open one to front (close it to load another order)
-    if typing
+^l:: OpenOrder()
+
+; Strict: only 15-20 digits, so a hostile link can't pass anything else in
+; Returns the order key: "<id>" = mathong-system (linebot) order, "liff/<id>" = LINE OA order
+ParseProtocolId(arg) {
+    return RegExMatch(arg, "i)^mathong-so:(?://)?((?:liff/)?\d{15,20})/?$", &m) ? StrLower(m[1]) : ""
+}
+
+IsOrderKey(key) {
+    return RegExMatch(key, "^(liff/)?\d{15,20}$")
+}
+
+ProtocolCommand() {
+    return '"' . A_ScriptFullPath . '" "%1"'
+}
+
+; Per-user (HKCU, no admin). Only the compiled exe registers, so testing the .ahk never hijacks the link.
+; Re-registers when the exe was moved.
+RegisterProtocol() {
+    if !A_IsCompiled
         return
+    key := "HKCU\Software\Classes\mathong-so"
+    if (RegRead(key . "\shell\open\command", , "") = ProtocolCommand())
+        return
+    RegWrite("URL:Mathong SO", "REG_SZ", key)
+    RegWrite("", "REG_SZ", key, "URL Protocol")
+    RegWrite(ProtocolCommand(), "REG_SZ", key . "\shell\open\command")
+}
+
+; Another running copy of this script/exe. Matches the hidden main window title (starts with the
+; script path), not the process path: uncompiled scripts all run as AutoHotkey64.exe.
+FindOtherCopy() {
+    found := 0
+    DetectHiddenWindows(true)
+    for hwnd in WinGetList("ahk_class AutoHotkey")
+        if (hwnd != A_ScriptHwnd && IsCopyTitle(WinGetTitle(hwnd)))
+            found := hwnd
+    DetectHiddenWindows(false)
+    return found
+}
+
+; Main window title: compiled exe = bare path; .ahk script = "path - AutoHotkey v2.x"
+IsCopyTitle(title) {
+    return title = A_ScriptFullPath || InStr(title, A_ScriptFullPath . " - ") = 1
+}
+
+SendOrderId(hwnd, id) {
+    cds := Buffer(3 * A_PtrSize, 0) ; COPYDATASTRUCT
+    NumPut("UPtr", 0, "UInt", (StrLen(id) + 1) * 2, cds)
+    NumPut("Ptr", StrPtr(id), cds, 2 * A_PtrSize)
+    DetectHiddenWindows(true) ; target is the running copy's hidden main window
+    try SendMessage(0x4A, 0, cds, , "ahk_id " . hwnd, , , , 3000)
+}
+
+OnCopyData(wParam, lParam, msg, hwnd) {
+    ptr := NumGet(lParam, 2 * A_PtrSize, "Ptr"), size := NumGet(lParam, A_PtrSize, "UInt")
+    id := ptr ? StrGet(ptr, size // 2) : "" ; positive length = max chars, stops at the null
+    if IsOrderKey(id) ; untrusted input: only a valid order key may reach OpenOrder/the API
+        SetTimer(() => OpenOrder(id), -1) ; don't keep the sender waiting
+    else if pageGui ; plain 2nd launch: just bring the order window to front, never the Ctrl+L InputBox
+        pageGui.Show()
+    return true
+}
+
+; id = "" → Ctrl+L flow (ask for the ID); id given → from a mathong-so:// link (skip the InputBox)
+OpenOrder(id := "") {
+    ; One open at a time: a 2nd link/Ctrl+L while the 1st is still fetching or showing a dialog is ignored
+    static busy := false
+    if (typing || busy)
+        return
+    busy := true
+    try OpenOrderOnce(id)
+    finally busy := false
+}
+
+OpenOrderOnce(id) {
+    ; Only one order window at a time: bring the open one to front (close it to load another order)
     if pageGui {
         pageGui.Show()
+        if (id != "" && id != pageOrderId)
+            MsgBox("มี Order " . pageOrderId . " เปิดอยู่ กรุณาปิดก่อน", "Warning", "Icon! Owner" . pageGui.Hwnd)
         return
     }
 
@@ -52,16 +149,10 @@ Esc:: {
 
     WinActivate(SOHwnd)
 
-    ; Prefill from clipboard (backoffice "copy order id" button)
-    clip := Trim(A_Clipboard)
-    orderId := InputBox("กรุณาใส่ตัวเลข15-20หลัก", "ใส่ Order ID", "w200 h100", RegExMatch(clip, "^\d{15,20}$") ? clip :
-        "")
-    if (orderId.Result != "OK")
-        return
-    id := Trim(orderId.Value)
-    if !RegExMatch(id, "^\d{15,20}$") {
-        MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข15-20หลัก", "Error", "Iconx")
-        return
+    if (id = "") {
+        id := AskOrderKey()
+        if (id = "")
+            return
     }
 
     order := FetchOrder(id)
@@ -78,7 +169,55 @@ FindSOWindow() {
     return ""
 }
 
-FetchOrder(id) {
+; Ctrl+L: pick the source first (mathong-system and LINE OA IDs look alike), then the ID.
+; Returns the order key ("<id>" or "liff/<id>"), "" if cancelled.
+AskOrderKey() {
+    ; Prefill from clipboard (backoffice "copy order id" button)
+    clip := Trim(A_Clipboard)
+    d := Gui("+AlwaysOnTop -MinimizeBox", "ใส่ Order ID")
+    d.Add("Text", , "Order มาจาก:")
+    mathong := d.Add("Radio", "Checked", "Mathong System")
+    d.Add("Radio", "x+20", "LINE OA (LIFF)")
+    d.Add("Text", "xm", "Order ID (ตัวเลข 15-20 หลัก):")
+    edit := d.Add("Edit", "xm w220", RegExMatch(clip, "^\d{15,20}$") ? clip : "")
+    ok := d.Add("Button", "xm w105 Default", "OK")
+    cancel := d.Add("Button", "x+10 w105", "Cancel")
+    result := ""
+    ok.OnEvent("Click", (*) => (result := (mathong.Value ? "" : "liff/") . Trim(edit.Value), d.Destroy()))
+    cancel.OnEvent("Click", (*) => d.Destroy())
+    d.OnEvent("Close", (*) => d.Destroy())
+    d.OnEvent("Escape", (*) => d.Destroy())
+    d.Show()
+    WinWaitClose(d.Hwnd)
+    if (result != "" && !IsOrderKey(result)) {
+        MsgBox("Order ID ไม่ถูกต้อง. กรุณาใส่ตัวเลข15-20หลัก", "Error", "Iconx")
+        return ""
+    }
+    return result
+}
+
+; LINE OA (LIFF) order → same shape as a mathong-system order, so checks/page window/typing are shared
+NormalizeLiffOrder(raw) {
+    items := []
+    for el in raw.Get("items", [])
+        items.Push(Map(
+            "good_id_correction", el.Get("GoodID", ""),
+            "good_code_correction", el.Get("GoodCode", ""),
+            "good_code", el.Get("GoodCode", ""),
+            "quantity", el.Get("itemQty", ""),
+            "winspeed_good_code", el.Get("GoodCode", ""),
+            "winspeed_good_name", el.Get("GoodMarketName", "")))
+    return Map("items", items, "link_so", [],
+        ; user selects the WINSPEED customer by hand (cust_id "" → TypePage skips it); show the LINE name instead
+        "cust_id", "", "cust_code", "(LINE)", "cust_name", raw.Get("line_display_name", "") . " — เลือกลูกค้าใน Winspeed เอง",
+        "status", raw.Get("isConfirm", false) ? "ยืนยันแล้ว" : "ยังไม่ยืนยัน",
+        "rec_updated_when", raw.Get("updatedAt", ""))
+}
+
+FetchOrder(key) {
+    isLiff := SubStr(key, 1, 5) = "liff/"
+    id := isLiff ? SubStr(key, 6) : key
+    url := isLiff ? LIFF_API_URL . id : API_URL . id
     loading := Gui("+AlwaysOnTop -SysMenu +ToolWindow", "Loading")
     loading.Add("Text", "w260", "กำลังดึงข้อมูล Order " . id . " ...")
     bar := loading.Add("Progress", "w260 h16 +0x8") ; PBS_MARQUEE
@@ -87,7 +226,7 @@ FetchOrder(id) {
     try {
         whr := ComObject("WinHttp.WinHttpRequest.5.1")
         whr.SetTimeouts(5000, 5000, 10000, 15000)
-        whr.Open("GET", API_URL . id, true) ; async so the loading bar keeps animating
+        whr.Open("GET", url, true) ; async so the loading bar keeps animating
         whr.Send()
         while !whr.WaitForResponse(0)
             Sleep(50)
@@ -108,7 +247,8 @@ FetchOrder(id) {
         MsgBox("ไม่พบ Order ID: " . id . " (HTTP " . whr.Status . ")", "Error", "Iconx")
         return ""
     }
-    return jxon_load(&text)
+    order := jxon_load(&text)
+    return isLiff ? NormalizeLiffOrder(order) : order
 }
 
 ItemCode(el) {
@@ -157,7 +297,7 @@ ShowPageGui(order, id, SOHwnd) {
     ; Columns are pixels, GUI units are DPI-scaled.
     colsW := COLS[1] + COLS[2] + COLS[3] + COLS[4]
     W := Round((colsW + 4) * 96 / A_ScreenDPI)
-    g.Add("Text", "w" . W, "ลูกค้า: " . order.Get("cust_code", "") . " " . order.Get("cust_name", "") . "    สถานะ: " .
+    g.Add("Text", "w" . W, (SubStr(id, 1, 5) = "liff/" ? "[LINE OA] " : "[Mathong System] ") . "ลูกค้า: " . order.Get("cust_code", "") . " " . order.Get("cust_name", "") . "    สถานะ: " .
     order.Get("status", "")
     . "`nอัพเดต: " . SubStr(order["rec_updated_when"], 1, 19) . "    สินค้า: " . items.Length . " รายการ / " .
     totalPage . " หน้า")
@@ -260,11 +400,13 @@ ShowPageGui(order, id, SOHwnd) {
     toggle.OnEvent("Click", OnToggle)
     g.OnEvent("Close", OnClose)
     Refresh(1)
-    global pageGui := g
+    global pageGui := g, pageOrderId := id
     Place()
 
     OnClose(*) {
-        global pageGui := ""
+        global pageGui, pageOrderId
+        if (pageGui = g) ; an older window must not clear the newer one
+            pageGui := "", pageOrderId := ""
         g.Destroy()
     }
 }
@@ -318,9 +460,11 @@ TypePage(SOHwnd, cust_id, items, page) {
     typing := true
     abortTyping := false
 
-    ControlFocus("Edit46", SOHwnd)
-    ControlSend(cust_id . "{Enter}", "Edit46", SOHwnd) ; Customer ID
-    Sleep(200)
+    if (cust_id != "") { ; LINE OA order: user selects the customer in WINSPEED by hand
+        ControlFocus("Edit46", SOHwnd)
+        ControlSend(cust_id . "{Enter}", "Edit46", SOHwnd) ; Customer ID
+        Sleep(200)
+    }
 
     ControlClick "x588 y50", SOHwnd, , , , "NA" ; Run Bill Code
     Sleep(200)
