@@ -2,6 +2,7 @@
 #SingleInstance Off ; a mathong-so:// link starts a 2nd copy; it hands the order ID to the running copy and exits
 #Requires AutoHotkey v2.0
 #Include _JXON.ahk ; Ensure you have the JSON library available in your script directory
+#Include _theme.ahk ; colours, ThemeGui, AddPrimary, Enter → orange button
 
 ; --- Configuration ---
 SetTitleMatchMode 3 ; Exact match for window titles
@@ -23,58 +24,6 @@ global typing := false
 global abortTyping := false
 global pageGui := "" ; the open order window, if any
 global pageOrderId := "" ; order ID shown in pageGui
-global enterActions := Map() ; window hwnd → function run by Enter (coloured "buttons" are Text controls, not Default buttons)
-global T := Theme()
-
-; Colours from mathong-backoffice app/themes (LightTheme.ts / DarkTheme.ts). Dark follows Windows app mode.
-Theme() {
-    dark := false
-    try dark := RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme") = 0
-    return dark
-        ? Map("dark", true, "paper", "162130", "ink", "E7EDF5", "ink2", "9FAEC2", "rail", "0A1018",
-            "railText", "E7EDF5", "railMeta", "9FAEC2", "blue", "7FA8F5", "blueWash", "1D2C48",
-            "accent", "FB8A4C", "onAccent", "0D131C", "teal", "5CC6D6", "tealWash", "12343A",
-            "ok", "5BD28B", "okWash", "123323", "warn", "F4B54C", "warnWash", "3A2A0E", "bad", "FF8B7E")
-        : Map("dark", false, "paper", "FFFFFF", "ink", "0F1A2A", "ink2", "4E5B6E", "rail", "1D2B3F",
-            "railText", "E7EDF5", "railMeta", "B9C6D8", "blue", "1556C9", "blueWash", "E3ECFB",
-            "accent", "C2410C", "onAccent", "FFFFFF", "teal", "0F6E7F", "tealWash", "E0F1F4",
-            "ok", "127A3E", "okWash", "DDF3E5", "warn", "9A5B00", "warnWash", "FFF0D6", "bad", "B42318")
-}
-
-; Window colours + font (Leelawadee UI = Thai UI font on Win10/11; Tahoma kept if it is missing)
-ThemeGui(g) {
-    g.BackColor := T["paper"]
-    g.SetFont("s11 norm c" . T["ink"], "Tahoma")
-    g.SetFont(, "Leelawadee UI")
-    if T["dark"] ; dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE)
-        DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", g.Hwnd, "UInt", 20, "Int*", 1, "UInt", 4)
-}
-
-; Dark scrollbars/header/edit/button skins; light mode keeps the normal Windows look
-DarkSkin(ctrl, name := "DarkMode_Explorer") {
-    if T["dark"]
-        DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", name, "Ptr", 0)
-}
-
-; Column header stays light: every dark header theme draws black (unreadable) header text
-LVOpts() {
-    return " +LV0x20 Background" . T["paper"] . " c" . T["ink"] ; LVS_EX_FULLROWSELECT
-}
-
-; The one orange action of a window. Enter runs it while that window is active.
-AddPrimary(g, opts, text, fn) {
-    g.SetFont("bold c" . T["onAccent"])
-    b := g.Add("Text", opts . " +Center +0x200 Background" . T["accent"], text) ; SS_CENTERIMAGE: centred vertically
-    g.SetFont("norm c" . T["ink"])
-    b.OnEvent("Click", fn)
-    enterActions[g.Hwnd] := fn
-    return b
-}
-
-BGR(hex) {
-    n := Integer("0x" . hex)
-    return ((n & 0xFF) << 16) | (n & 0xFF00) | (n >> 16)
-}
 
 ; --- Startup: backoffice button opens mathong-so://<order id> ---
 linkId := A_Args.Length ? ParseProtocolId(A_Args[1]) : ""
@@ -102,12 +51,6 @@ if (linkId != "")
 Esc:: {
     global abortTyping := true
 }
-#HotIf
-
-; Enter = the window's orange button (replaces the old Default button)
-#HotIf !typing && enterActions.Has(WinActive("A"))
-Enter::
-NumpadEnter:: enterActions[WinActive("A")]()
 #HotIf
 
 ^l:: OpenOrder()
@@ -295,13 +238,7 @@ FetchOrder(key) {
     isLiff := SubStr(key, 1, 5) = "liff/"
     id := isLiff ? SubStr(key, 6) : key
     url := isLiff ? LIFF_API_URL . id : API_URL . id
-    loading := Gui("+AlwaysOnTop -SysMenu +ToolWindow", "Loading")
-    ThemeGui(loading)
-    loading.MarginX := 16, loading.MarginY := 14
-    loading.Add("Text", "w320", "กำลังดึงข้อมูล Order " . id . " ...")
-    bar := loading.Add("Progress", "w320 h8 y+10 +0x8") ; PBS_MARQUEE
-    SendMessage(0x40A, 1, 30, bar) ; PBM_SETMARQUEE: start animation
-    loading.Show()
+    loading := ShowLoading("กำลังดึงข้อมูล Order " . id . " ...")
     try {
         whr := ComObject("WinHttp.WinHttpRequest.5.1")
         whr.SetTimeouts(5000, 5000, 10000, 15000)
@@ -421,24 +358,7 @@ ShowPageGui(order, id, SOHwnd) {
     preview.ModifyCol(1, "Integer"), preview.ModifyCol(4, "Integer") ; numbers right-aligned
     kinds := [] ; per page: "ok" | "bad" | "idle" → colour of the สถานะ cell
     shownPage := 1
-
-    ; Colour the สถานะ column (NM_CUSTOMDRAW). Offsets: NMLVCUSTOMDRAW on 64/32-bit.
-    PagesDraw(ctrl, lParam) {
-        P := A_PtrSize
-        stage := NumGet(lParam, 3 * P, "UInt")
-        if (stage = 1 || stage = 0x10001) ; CDDS_PREPAINT / ITEMPREPAINT → ask for each item / sub-item
-            return 0x20
-        if (stage = 0x30001) { ; CDDS_ITEMPREPAINT | CDDS_SUBITEM
-            row := NumGet(lParam, 5 * P + 16, "UPtr") + 1
-            sub := NumGet(lParam, P = 8 ? 88 : 56, "Int")
-            k := (sub = 2 && row <= kinds.Length) ? kinds[row] : ""
-            NumPut("UInt", BGR(k = "ok" ? T["ok"] : k = "bad" ? T["bad"] : k = "idle" ? T["ink2"] : T["ink"]),
-                lParam, P = 8 ? 80 : 48) ; clrText
-            return 0x2 ; CDRF_NEWFONT
-        }
-        return 0
-    }
-    pages.OnNotify(-12, PagesDraw)
+    ColorStatusColumn(pages, 3, kinds)
 
     ; Show at top-right of the work area (pixels, excludes taskbar)
     Place() {
