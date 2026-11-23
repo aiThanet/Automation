@@ -23,6 +23,8 @@ FIELD_TIMEOUT := 3000    ; ms max wait for WINSPEED to move the cursor after one
 apiUrl := "http://mathongapi.jpn.local/ecom/upload/bigseller"
 ; apiUrl := "http://localhost:3100/ecom/upload/bigseller"
 ITEMS_URL := "http://mathongapi.jpn.local/item/all" ; WINSPEED product list (code check + search in the edit dialog)
+CUSTOMERS_URL := "http://mathongapi.jpn.local/customer/all" ; WINSPEED customers (pick when the API found none: cust_id -1)
+PLATFORM_CUST_GROUP := 2000 ; CustGroupID of "003 ลูกค้า Platform Online" (all Shopee / Lazada / TikTok customers)
 global typing := false
 global abortTyping := false
 global orderStatus := []   ; per order: "" = not typed, "HH:mm" = typed, "ERR ..." = stopped
@@ -31,6 +33,8 @@ global keySelected := ""   ; its "key the selected order" action (Ctrl+N runs it
 global uploadName := ""    ; uploaded file name (window title)
 global products := []      ; [code, name] of every usable WINSPEED product, for search
 global validCodes := Map() ; code → name; empty = list not loaded (then only an empty code counts as wrong)
+global customers := []     ; [CustID, CustCode, CustName] of active platform customers, for the picker
+global custById := Map()   ; CustID → [CustID, CustCode, CustName]; empty = list not loaded
 global editDlgHwnd := 0    ; the open edit dialog, if any
 global editDown := ""      ; its ↓ action: from the code box into the search results
 
@@ -137,11 +141,14 @@ MoveTo(SOHwnd, target) {
     }
     orders := response_obj
     global orderStatus := [], uploadName := fileName
-    loading := ShowLoading("กำลังโหลดรหัสสินค้าจาก WINSPEED ...")
+    loading := ShowLoading("กำลังโหลดรหัสสินค้าและลูกค้าจาก WINSPEED ...")
     loaded := FetchProducts()
+    custLoaded := FetchCustomers()
     loading.Destroy()
     if !loaded
         MsgBox("โหลดรายการรหัสสินค้าไม่ได้`nแก้รหัสได้ แต่ตรวจไม่ได้ว่ามีใน WINSPEED หรือไม่", "Warning", "Icon!")
+    if !custLoaded
+        MsgBox("โหลดรายชื่อลูกค้าไม่ได้`nOrder ที่ไม่พบลูกค้าจะคีย์ไม่ได้จนกว่าจะโหลดใหม่ (Ctrl+L)", "Warning", "Icon!")
     loop orders.Length
         orderStatus.Push("")
     ShowOrdersGui()
@@ -208,6 +215,46 @@ FetchProducts() {
         validCodes[code] := products[products.Length][2]
     }
     return products.Length > 0
+}
+
+; Active customers of the platform group from mathongapi /customer/all. Regex scan: 4.7 MB; CustID, CustGroupID,
+; CustCode, CustName and Inactive all come before each record's nested objects.
+FetchCustomers() {
+    global customers := [], custById := Map()
+    req := ComObject("WinHttp.WinHttpRequest.5.1")
+    req.SetTimeouts(5000, 5000, 10000, 30000)
+    try {
+        req.Open("GET", CUSTOMERS_URL, true) ; async so the loading bar keeps animating
+        req.Send()
+        while !req.WaitForResponse(0)
+            Sleep(50)
+    } catch
+        return false
+    if (req.Status != 200)
+        return false
+    text := Utf8Body(req)
+    pos := 1
+    while (pos := RegExMatch(text, '\{"CustID": (\d+),[^{}]*?"CustGroupID": (\d+|null)[^{}]*?'
+        . '"CustCode": "((?:[^"\\]|\\.)*)"[^{}]*?"CustName": "((?:[^"\\]|\\.)*)"[^{}]*?"Inactive": "(\w*)"', &m, pos)) {
+        pos += m.Len
+        if (m[2] != PLATFORM_CUST_GROUP || m[5] != "A")
+            continue
+        c := [Integer(m[1]), m[3], StrReplace(StrReplace(m[4], '\"', '"'), "\\", "\")]
+        customers.Push(c), custById[c[1]] := c
+    }
+    return customers.Length > 0
+}
+
+; No usable customer: API found none (-1 / empty), or not an active platform customer (when the list loaded)
+IsBadCustomer(order) {
+    id := order["cust_id"]
+    return !IsInteger(id) || id = -1 || (custById.Count && !custById.Has(Integer(id)))
+}
+
+; [CustID, CustCode, CustName] of the order's customer, "" when unknown (Map keys are type-sensitive: "20020" ≠ 20020)
+CustomerOf(order) {
+    id := order["cust_id"]
+    return IsInteger(id) ? custById.Get(Integer(id), "") : ""
 }
 
 ; Wrong code = empty, or not in WINSPEED (when the product list loaded)
@@ -366,8 +413,13 @@ ShowOrdersGui() {
     ; Added last + WS_CLIPSIBLINGS so the band never paints over the labels above
     g.Add("Text", "x0 y0 w" . (W + 2 * M) . " h" . bandH . " +0x4000000" . rail)
 
+    ; Customer of the selected order: red until one is chosen when the API found none
     g.SetFont("s11 norm c" . T["ink"])
-    lv := g.Add("ListView", "x" . M . " y" . (bandH + M) . " w" . W . " r8 -Multi NoSortHdr" . LVOpts(),
+    custText := g.Add("Text", "x" . M . " y" . (bandH + M) . " w" . (W - 100) . " h28 +0x200 +0x4000") ; vcentre, end "…"
+    g.SetFont("c" . T["blue"])
+    custLink := g.Add("Text", "x+8 yp w92 h28 +0x200 Right", "เปลี่ยนลูกค้า")
+    g.SetFont("c" . T["ink"])
+    lv := g.Add("ListView", "x" . M . " y+8 w" . W . " r8 -Multi NoSortHdr" . LVOpts(),
         ["#", "Order ID", "แพลตฟอร์ม", "สถานะ"])
     DarkSkin(lv)
     lv.ModifyCol(1, "Integer")
@@ -388,6 +440,10 @@ ShowOrdersGui() {
     ColorStatusColumn(itemsLv, 0, itemKinds)
     g.SetFont("s10 c" . T["ink2"])
     itemsHint := g.Add("Text", "x" . M . " y+4 w" . W, "ดับเบิลคลิกรายการเพื่อแก้รหัสสินค้า / จำนวน")
+    g.SetFont("s11 c" . T["blue"])
+    addLink := g.Add("Text", "x" . M . " y+6", "＋ เพิ่มรายการ")
+    g.SetFont("c" . T["bad"])
+    delLink := g.Add("Text", "x+24 yp", "✕ ลบรายการที่เลือก")
     g.MarginX := 0 ; AutoSize adds MarginX after the right-most control: the full-width band already ends at the edge
 
     ; Top-right of the work area (pixels, excludes taskbar): WINSPEED stays visible beside it
@@ -396,6 +452,8 @@ ShowOrdersGui() {
         WinGetPos(, , &gw, , g.Hwnd)
         MonitorGetWorkArea(, , &top, &right)
         WinMove(right - gw, top, , , g.Hwnd)
+        ; Paint triggered while this thread still runs can skip the colour callback: repaint once it has ended
+        SetTimer(() => (lv.Redraw(), itemsLv.Redraw()), -30)
     }
 
     Refresh(selectRow) {
@@ -404,8 +462,10 @@ ShowOrdersGui() {
         for i, o in orders {
             st := orderStatus[i]
             bad := st = "" ? BadItems(o) : 0
-            kinds.Push(bad ? "badrow" : SubStr(st, 1, 4) = "ERR " ? "bad" : st = "" ? "idle" : "ok")
-            text := bad ? "▲ รหัสไม่พบ " . bad . " รายการ" : st = "" ? "○ ยังไม่คีย์"
+            badCust := st = "" && IsBadCustomer(o)
+            kinds.Push(bad || badCust ? "badrow" : SubStr(st, 1, 4) = "ERR " ? "bad" : st = "" ? "idle" : "ok")
+            text := badCust ? "▲ ไม่พบลูกค้า" . (bad ? " · รหัส " . bad : "")
+                : bad ? "▲ รหัสไม่พบ " . bad . " รายการ" : st = "" ? "○ ยังไม่คีย์"
                 : SubStr(st, 1, 4) = "ERR " ? "✗ ไม่สำเร็จ " . SubStr(st, 5) : "✓ คีย์แล้ว " . st
             lv.Add(i = selectRow ? "Select Focus Vis" : "", i, o["order_id"], o["platform"], text)
         }
@@ -427,9 +487,18 @@ ShowOrdersGui() {
         meta.Text := "Order ที่ " . i . " / " . orders.Length . "   ·   สินค้า " . o["items"].Length . " รายการ`n"
             . LogisticMsg(o) . "`nConfirm time: " . o["confirm_time"]
         bad := BadItems(o)
-        btn.Text := bad ? "แก้รหัสสินค้าสีแดงก่อน  (" . bad . " รายการ)"
+        badCust := IsBadCustomer(o)
+        c := CustomerOf(o)
+        custText.Text := badCust ? "▲ ไม่พบลูกค้าของร้านนี้ — กดเลือกลูกค้า"
+            : c ? c[2] . " · " . c[3] : "ลูกค้า " . o["cust_id"]
+        custText.Opt("Background" . (badCust ? T["badWash"] : T["paper"]))
+        custText.SetFont("c" . (badCust ? T["bad"] : T["ink"]))
+        custText.Redraw()
+        custLink.Text := badCust ? "เลือกลูกค้า" : "เปลี่ยนลูกค้า"
+        btn.Text := badCust ? "เลือกลูกค้าก่อน"
+            : bad ? "แก้รหัสสินค้าสีแดงก่อน  (" . bad . " รายการ)"
             : (orderStatus[i] = "" ? "คีย์" : "คีย์ซ้ำ") . " Order " . i . " / " . orders.Length
-        SetPrimaryEnabled(btn, !bad)
+        SetPrimaryEnabled(btn, !bad && !badCust)
         if bad ; show the red rows right away
             showItems := true
         FillItems()
@@ -453,7 +522,7 @@ ShowOrdersGui() {
         itemsLv.ModifyCol(2, lw - used)
         toggle.Text := (showItems ? "▼" : "▶") . " รายการสินค้า (" . o["items"].Length . ")"
             . (bad ? "   ▲ รหัสไม่พบ " . bad : "")
-        itemsLv.Visible := itemsHint.Visible := showItems
+        itemsLv.Visible := itemsHint.Visible := addLink.Visible := delLink.Visible := showItems
         Place()
     }
 
@@ -469,10 +538,65 @@ ShowOrdersGui() {
             Refresh(shown) ; status, button and red rows follow the fix
     }
 
+    ; Pick a platform customer; applies to every order not yet keyed from the same platform + store
+    OnPickCustomer(*) {
+        if typing
+            return
+        o := orders[shown]
+        if !customers.Length {
+            MsgBox("ไม่มีรายชื่อลูกค้า (โหลดจาก WINSPEED ไม่ได้) กด Ctrl+L เพื่อโหลดใหม่", "Warning", "Icon! Owner" . g.Hwnd)
+            return
+        }
+        id := PickCustomer(g, o)
+        if (id = "")
+            return
+        for i, x in orders
+            if (orderStatus[i] = "" && x["platform"] = o["platform"] && x["store"] = o["store"])
+                x["cust_id"] := id
+        o["cust_id"] := id ; also when this order was already keyed
+        Refresh(shown)
+    }
+
+    ; New item: same dialog (search + code check); only added when saved
+    OnAddItem(*) {
+        if typing
+            return
+        item := Map("sku", "(เพิ่มเอง)", "goodcode", "", "qty", 1)
+        if EditItem(g, item) {
+            orders[shown]["items"].Push(item)
+            Refresh(shown)
+        }
+    }
+
+    OnDeleteItem(*) {
+        if typing
+            return
+        items := orders[shown]["items"]
+        row := itemsLv.GetNext()
+        if (row = 0) {
+            MsgBox("กรุณาเลือกรายการที่จะลบ", "Warning", "Icon! Owner" . g.Hwnd)
+            return
+        }
+        if (items.Length = 1) { ; an order with no items would key only customer + description
+            MsgBox("ต้องมีอย่างน้อย 1 รายการ", "Warning", "Icon! Owner" . g.Hwnd)
+            return
+        }
+        it := items[row]
+        if (MsgBox("ลบรายการ #" . row . "`nSKU: " . it["sku"] . "`nรหัส: " . (it["goodcode"] = "" ? "— ไม่พบ —" : it["goodcode"])
+            . "  จำนวน: " . it["qty"], "ยืนยันการลบ", "YesNo Icon? Owner" . g.Hwnd) != "Yes")
+            return
+        items.RemoveAt(row)
+        Refresh(shown)
+    }
+
     OnKey(*) {
         row := lv.GetNext()
         if (row = 0) {
             MsgBox("กรุณาเลือก Order", "Warning", "Icon! Owner" . g.Hwnd)
+            return
+        }
+        if IsBadCustomer(orders[row]) { ; button is greyed out: choose the customer first
+            OnPickCustomer()
             return
         }
         if BadItems(orders[row]) { ; button is greyed out: red rows must be fixed first
@@ -514,6 +638,9 @@ ShowOrdersGui() {
     lv.OnEvent("ItemSelect", (ctrl, row, selected) => selected ? ShowOrder(row) : "")
     toggle.OnEvent("Click", OnToggle)
     itemsLv.OnEvent("DoubleClick", OnEditItem)
+    addLink.OnEvent("Click", OnAddItem)
+    custLink.OnEvent("Click", OnPickCustomer)
+    delLink.OnEvent("Click", OnDeleteItem)
     g.OnEvent("Close", OnClose)
     ordersGui := g, keySelected := OnKey
     shown := 1, showItems := false
@@ -521,6 +648,57 @@ ShowOrdersGui() {
     while (first < orders.Length && orderStatus[first] != "")
         first++
     Refresh(first)
+}
+
+; Choose a customer from the active platform customers. Returns its CustID, "" when cancelled.
+PickCustomer(owner, order) {
+    d := Gui("+AlwaysOnTop -MinimizeBox +Owner" . owner.Hwnd, "เลือกลูกค้า")
+    ThemeGui(d)
+    d.MarginX := 16, d.MarginY := 14
+    W := 420, BW := (W - 10) // 2
+    d.SetFont("s10 bold c" . T["ink2"])
+    d.Add("Text", , "ร้าน")
+    d.SetFont("s11 norm c" . T["ink"])
+    d.Add("Text", "xm y+2 w" . W, order["platform"] . "  ·  " . order["store"])
+    d.SetFont("s10 bold c" . T["ink2"])
+    d.Add("Text", "xm y+12", "ลูกค้า (003 ลูกค้า Platform Online)")
+    d.SetFont("s11 norm c" . T["ink"])
+    list := d.Add("ListView", "xm y+4 w" . W . " r8 -Multi NoSortHdr" . LVOpts(), ["", "รหัสลูกค้า", "ชื่อลูกค้า"])
+    DarkSkin(list)
+    for c in customers
+        list.Add(c[1] = order["cust_id"] ? "Select Focus" : "", c[1] = order["cust_id"] ? "✓" : "", c[2], c[3])
+    list.ModifyCol(1, Round(28 * A_ScreenDPI / 96)), list.ModifyCol(2, "AutoHdr"), list.ModifyCol(3, "AutoHdr")
+    d.SetFont("s10 c" . T["ink2"])
+    d.Add("Text", "xm y+4 w" . W, "ดับเบิลคลิก หรือ Enter เพื่อเลือก · ใช้กับทุก Order ของร้านนี้ที่ยังไม่คีย์")
+    d.SetFont("s11 c" . T["ink"])
+    cancel := d.Add("Button", "xm y+16 w" . BW . " h40", "ยกเลิก (Esc)")
+    DarkSkin(cancel)
+    picked := ""
+    OnPick(*) {
+        if !(row := list.GetNext())
+            return
+        picked := customers[row][1]
+        d.Destroy()
+    }
+    AddPrimary(d, "x+10 yp w" . BW . " h40", "เลือก (Enter)", OnPick)
+    list.OnEvent("DoubleClick", OnPick)
+    cancel.OnEvent("Click", (*) => d.Destroy())
+    d.OnEvent("Close", (*) => d.Destroy())
+    d.OnEvent("Escape", (*) => d.Destroy())
+
+    hwnd := d.Hwnd
+    owner.Opt("+Disabled") ; modal
+    d.Show("Hide")
+    WinGetPos(&ox, &oy, , , owner.Hwnd)
+    WinGetPos(, , &dw, , hwnd)
+    WinMove(Max(0, ox - dw), oy, , , hwnd) ; left of the order window, WINSPEED stays visible
+    d.Show()
+    list.Focus()
+    WinWaitClose(hwnd)
+    enterActions.Delete(hwnd)
+    owner.Opt("-Disabled")
+    WinActivate(owner.Hwnd)
+    return picked
 }
 
 ; Edit one item's WINSPEED code / quantity. Search by code or name; only a code that exists in WINSPEED
